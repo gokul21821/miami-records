@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import pandas as pd
 
-# Company detection removed - not needed with simplified borrower identification
+# Company detection removed - not needed with simplified borrower/debtor identification
 
 def normalize_address(rec: Dict[str, Any]) -> str:
     parts = []
@@ -24,16 +24,14 @@ def normalize_address(rec: Dict[str, Any]) -> str:
 
 # Borrower identification logic removed - partY_CODE "D" guarantees borrower is firsT_PARTY
 
-def map_record(rec: Dict[str, Any]) -> Dict[str, Any]:
-    # partY_CODE "D" guarantees borrower is firsT_PARTY
+def map_record_mor(rec: Dict[str, Any]) -> Dict[str, Any]:
+    # party_code "D" implies borrower is first party
     borrower = (rec.get("firsT_PARTY") or "").strip()
     address = normalize_address(rec)
-    # Dates may be like "1/2/2025 12:00:00 AM" — use recording date as primary
     doc_date = (rec.get("reC_DATE") or rec.get("doC_DATE") or "").strip()
-    # Consideration_1 appears to hold loan amount in sample payloads
     loan_amount = rec.get("consideratioN_1")
-    # Interest rate not in metadata; leave blank for now
     return {
+        "Doc_Type_Code": "MOR",
         "Name": borrower,
         "Address": address,
         "Phone1": "",
@@ -51,7 +49,36 @@ def map_record(rec: Dict[str, Any]) -> Dict[str, Any]:
         "Book_Type": (rec.get("booK_TYPE") or "").strip(),
     }
 
-def process_day(day_dir: Path) -> pd.DataFrame:
+def map_record_lie(rec: Dict[str, Any]) -> Dict[str, Any]:
+    # Debtor-centric mapping for liens
+    party_code = (rec.get("partY_CODE") or "").upper()
+    first_party = (rec.get("firsT_PARTY") or "").strip()
+    second_party = (rec.get("seconD_PARTY") or "").strip()
+    # If Direct, creditor tends to be first party; debtor is second party
+    debtor = second_party if party_code == "D" else first_party
+    address = normalize_address(rec)
+    doc_date = (rec.get("reC_DATE") or rec.get("doC_DATE") or "").strip()
+    loan_amount = rec.get("consideratioN_1")
+    return {
+        "Doc_Type_Code": "LIE",
+        "Name": debtor,
+        "Address": address,
+        "Phone1": "",
+        "Phone2": "",
+        "Phone3": "",
+        "Phone4": "",
+        "Rate of Interest": "",
+        "Loan Amount": loan_amount if loan_amount is not None else "",
+        "Date of Document": doc_date,
+        "Doc Type": (rec.get("doC_TYPE") or "").strip(),
+        "CFN_Master_ID": rec.get("cfN_MASTER_ID") or "",
+        "Rec_Book": str(rec.get("reC_BOOK") or ""),
+        "Rec_Page": str(rec.get("reC_PAGE") or ""),
+        "Rec_BookPage": rec.get("reC_BOOKPAGE") or "",
+        "Book_Type": (rec.get("booK_TYPE") or "").strip(),
+    }
+
+def process_day(day_dir: Path, doc_code: str) -> pd.DataFrame:
     records_path = day_dir / "records.json"
     if not records_path.exists():
         return pd.DataFrame()
@@ -64,14 +91,18 @@ def process_day(day_dir: Path) -> pd.DataFrame:
         return pd.DataFrame()
     rows = []
     for rec in data:
-        # Filter to keep only "D" (Direct) records - borrower as first party
-        party_code = rec.get("partY_CODE", "")
-        if party_code != "D":
-            continue  # Skip "R" (Reverse) records - lender as first party
-
-        mapped = map_record(rec)
-        # Include all remaining records (no duplicate or company filters)
-        rows.append(mapped)
+        party_code = (rec.get("partY_CODE") or "").upper()
+        if doc_code == "MOR":
+            # Keep only Direct for mortgages
+            if party_code != "D":
+                continue
+            mapped = map_record_mor(rec)
+        else:
+            # For liens, include both directions, map to debtor-centric
+            mapped = map_record_lie(rec)
+        # Skip rows without a name to keep enrichment compatible
+        if mapped.get("Name", "").strip():
+            rows.append(mapped)
 
     return pd.DataFrame(rows)
 
@@ -80,7 +111,7 @@ def month_key(date_str: str) -> str:
     return f"{d.year}-{d.month:02d}"
 
 def main():
-    ap = argparse.ArgumentParser(description="Step 3: Normalize daily MOR records into borrower-centric rows")
+    ap = argparse.ArgumentParser(description="Step 3: Normalize daily records (MOR/LIE) into person-centric rows")
     ap.add_argument("--start-date", required=True)
     ap.add_argument("--end-date", required=True)
     ap.add_argument("--document-type", default="MORTGAGE - MOR")
@@ -93,6 +124,7 @@ def main():
     end = dt.date.fromisoformat(args.end_date)
 
     doc_folder = args.document_type.replace(" - ", "_").replace(" ", "_").upper()
+    doc_code = "LIE" if "LIE" in args.document_type.upper() else "MOR"
 
     # Group dates per month
     cur = start
@@ -116,7 +148,7 @@ def main():
         month_frames = []
         for date_str in dates:
             day_dir = Path(args.bronze_root) / date_str / doc_folder
-            df = process_day(day_dir)
+            df = process_day(day_dir, doc_code)
             if not df.empty:
                 # add date column for traceability
                 df.insert(0, "Date", date_str)
@@ -126,7 +158,7 @@ def main():
             month_df = pd.concat(month_frames, ignore_index=True)
         else:
             month_df = pd.DataFrame(columns=[
-                "Date","Name","Address","Phone1","Phone2","Phone3","Phone4","Rate of Interest",
+                "Date","Doc_Type_Code","Name","Address","Phone1","Phone2","Phone3","Phone4","Rate of Interest",
                 "Loan Amount","Date of Document","Doc Type","CFN_Master_ID",
                 "Rec_Book","Rec_Page","Rec_BookPage","Book_Type"
             ])

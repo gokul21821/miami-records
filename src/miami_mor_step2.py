@@ -107,14 +107,52 @@ def write_jsonl_record(file_path: str, record: Dict[str, Any]) -> None:
         json.dump(record, f, ensure_ascii=False)
         f.write('\n')
 
-def write_error_log(error_path: str, error_msg: str, response_text: str = "") -> None:
+def write_error_log(error_path: str, error_msg: str, response_text: str = "", date_str: str = "", document_type: str = "") -> None:
     """Write error details to a log file for diagnosis."""
-    ensure_dirs(os.path.dirname(error_path))
-    with open(error_path, 'w', encoding='utf-8') as f:
-        f.write(f"Error: {error_msg}\n")
-        if response_text:
-            f.write(f"Response (first 500 chars): {response_text[:500]}\n")
-        f.write(f"Timestamp: {dt.datetime.utcnow().isoformat() + 'Z'}\n")
+    try:
+        ensure_dirs(os.path.dirname(error_path))
+        with open(error_path, 'w', encoding='utf-8') as f:
+            f.write(f"Error: {error_msg}\n")
+            if date_str:
+                f.write(f"Date: {date_str}\n")
+            if document_type:
+                f.write(f"Document Type: {document_type}\n")
+            if response_text:
+                f.write(f"Response (first 500 chars): {response_text[:500]}\n")
+            f.write(f"Timestamp: {dt.datetime.utcnow().isoformat() + 'Z'}\n")
+    except Exception as log_error:
+        # Fallback: write to a general error log if specific error path fails
+        fallback_path = os.path.join("data", "bronze", "errors", f"{date_str or 'unknown'}_error.log")
+        try:
+            ensure_dirs(os.path.dirname(fallback_path))
+            with open(fallback_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{dt.datetime.utcnow().isoformat() + 'Z'}] Failed to write to {error_path}: {log_error}\n")
+                f.write(f"Original error: {error_msg}\n")
+                if response_text:
+                    f.write(f"Response: {response_text[:500]}\n")
+                f.write("---\n")
+        except Exception:
+            # Last resort: just print to console
+            print(f"CRITICAL: Could not write error log. Original error: {error_msg}")
+
+
+def get_error_log_path(out_root: str, date_str: str, document_type: str, specific_file: str = "error.log") -> str:
+    """Get a safe error log path, with fallback to general error directory."""
+    doc_folder = document_type.replace(" - ", "_").replace(" ", "_").upper()
+    primary_path = os.path.join(out_root, date_str, doc_folder, specific_file)
+
+    # Check if primary path is accessible
+    try:
+        ensure_dirs(os.path.dirname(primary_path))
+        # Test if we can write to the directory
+        test_file = os.path.join(os.path.dirname(primary_path), "test_write.tmp")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        return primary_path
+    except Exception:
+        # Fallback to general error directory
+        return os.path.join("data", "bronze", "errors", f"{date_str}_{specific_file}")
 
 def write_monthly_csv(csv_path: str, date_str: str, count: int, overflow: bool) -> None:
     """Append daily summary to monthly CSV file."""
@@ -210,9 +248,9 @@ def process_date(
             if "|RESPONSE_TEXT:" in error_str:
                 response_text = error_str.split("|RESPONSE_TEXT:")[1]
 
-            # Log the error for diagnosis
-            error_path = os.path.join(day_dir, "error.log")
-            write_error_log(error_path, error_str.split("|RESPONSE_TEXT:")[0], response_text)
+            # Get safe error log path with fallback
+            error_path = get_error_log_path(out_root, date_str, document_type, "error.log")
+            write_error_log(error_path, error_str.split("|RESPONSE_TEXT:")[0], response_text, date_str, document_type)
             print(f"Error logged to {error_path}")
         raise
 
@@ -223,8 +261,10 @@ def process_date(
     # Create document folder name
     doc_folder = document_type.replace(" - ", "_").replace(" ", "_").upper()
 
-    # Write daily files
+    # Define day_dir early for error logging
     day_dir = os.path.join(out_root, date_str, doc_folder)
+
+    # Write daily files
     ensure_dirs(day_dir)
 
     records_path = os.path.join(day_dir, "records.json")

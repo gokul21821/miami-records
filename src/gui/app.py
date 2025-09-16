@@ -95,6 +95,21 @@ class App(tk.Tk):
         self.fetch_btn = ttk.Button(f, text="Fetch Records", command=self._on_fetch)
         self.fetch_btn.grid(row=2, column=3, sticky="e", pady=(8, 0))
 
+        # Document type selector
+        ttk.Label(f, text="Document Type").grid(row=4, column=0, sticky="w", pady=(8, 0))
+        self.f_doc_type_var = tk.StringVar(value="MORTGAGE - MOR")
+        from src.config.doc_types import GUI_DOC_TYPE_OPTIONS
+        self.f_doc_type_combo = ttk.Combobox(
+            f,
+            textvariable=self.f_doc_type_var,
+            values=GUI_DOC_TYPE_OPTIONS,
+            state="readonly",
+        )
+        self.f_doc_type_combo.grid(row=5, column=0, sticky="ew")
+
+        # Bind change event to refresh months if needed
+        self.f_doc_type_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_months())
+
     def _build_csv_tab(self) -> None:
         f = self.csv_tab
         for i in range(4):
@@ -115,6 +130,21 @@ class App(tk.Tk):
         self.csv_btn = ttk.Button(f, text="Create CSV (normalize + dedupe)", command=self._on_csv_pipeline)
         self.csv_btn.grid(row=2, column=3, sticky="e", pady=(8, 0))
 
+        # Document type selector
+        ttk.Label(f, text="Document Type").grid(row=4, column=0, sticky="w", pady=(8, 0))
+        self.c_doc_type_var = tk.StringVar(value="MORTGAGE - MOR")
+        from src.config.doc_types import GUI_DOC_TYPE_OPTIONS
+        self.c_doc_type_combo = ttk.Combobox(
+            f,
+            textvariable=self.c_doc_type_var,
+            values=GUI_DOC_TYPE_OPTIONS,
+            state="readonly",
+        )
+        self.c_doc_type_combo.grid(row=5, column=0, sticky="ew")
+
+        # Bind change event to refresh months if needed
+        self.c_doc_type_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_months())
+
     def _build_enrich_tab(self) -> None:
         f = self.enrich_tab
         for i in range(6):
@@ -128,6 +158,19 @@ class App(tk.Tk):
 
         self.refresh_months_btn = ttk.Button(f, text="Refresh Months", command=self._refresh_months)
         self.refresh_months_btn.grid(row=1, column=1, sticky="w")
+
+        # Document type selector
+        ttk.Label(f, text="Document Type").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.e_doc_type_var = tk.StringVar(value="MORTGAGE - MOR")
+        from src.config.doc_types import GUI_DOC_TYPE_OPTIONS
+        self.e_doc_type_combo = ttk.Combobox(
+            f,
+            textvariable=self.e_doc_type_var,
+            values=GUI_DOC_TYPE_OPTIONS,
+            state="readonly",
+        )
+        self.e_doc_type_combo.grid(row=3, column=0, sticky="ew", padx=(0, 8))
+        self.e_doc_type_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_months())
 
         ttk.Label(f, text="From row (1-based)").grid(row=0, column=2, sticky="w")
         self.e_from = ttk.Entry(f)
@@ -168,6 +211,9 @@ class App(tk.Tk):
             "--mode", "auto",
             "--cookies", cookies,
         ]
+        # Pass selected document type (e.g., "MORTGAGE - MOR" or "LIEN - LIE")
+        doc_type_label = self.f_doc_type_var.get().strip() or "MORTGAGE - MOR"
+        args += ["--document-type", doc_type_label]
         if self.f_force.get():
             args.append("--force")
 
@@ -192,18 +238,25 @@ class App(tk.Tk):
             "--start-date", start,
             "--end-date", end,
         ]
+        # Pass selected document type to normalizer
+        csv_doc_type_label = self.c_doc_type_var.get().strip() or "MORTGAGE - MOR"
+        step3 += ["--document-type", csv_doc_type_label]
         if self.c_force.get():
             step3.append("--force")
 
         def after_step3(rc: int) -> None:
             if rc != 0:
                 return
+            # Resolve paths based on selected document type
+            from .paths import doc_folder_for
+            doc_folder = doc_folder_for(csv_doc_type_label)
+            monthly_dir = ROOT_DIR / "data" / "silver" / "monthly" / doc_folder
             for m in months:
-                inp = normalized_csv_path(m)
+                inp = monthly_dir / f"{m}_normalized.csv"
                 if not inp.exists():
                     self._append_log(f"[dedupe] Skipping {m} (no normalized CSV at {inp})")
                     continue
-                outp = normalized_clean_csv_path(m)
+                outp = monthly_dir / f"{m}_normalized_clean.csv"
                 args = [sys.executable, "-u", str(ROOT_DIR / "src" / "remove_duplicates.py"), str(inp), str(outp)]
                 self._append_log(f"[dedupe] Running dedupe for {m}")
                 done = threading.Event()
@@ -226,11 +279,16 @@ class App(tk.Tk):
             messagebox.showerror("Validation", "Please select a month.")
             return
 
-        src_path, reason = pick_enrichment_input(month)
+        # Get doc-type specific paths
+        doc_type = self.e_doc_type_var.get() if hasattr(self, 'e_doc_type_var') else "MORTGAGE - MOR"
+        from .paths import doc_folder_for
+        doc_folder = doc_folder_for(doc_type)
+        src_path, reason = pick_enrichment_input(month, doc_folder)
         if src_path is None:
-            messagebox.showerror("Input missing", f"No normalized CSV found for {month}.\nExpected:\n{normalized_clean_csv_path(month)}\nor\n{normalized_csv_path(month)}")
+            from .paths import normalized_clean_csv_path, normalized_csv_path
+            messagebox.showerror("Input missing", f"No normalized CSV found for {month}.\nExpected:\n{normalized_clean_csv_path(month, doc_folder)}\nor\n{normalized_csv_path(month, doc_folder)}")
             return
-        dst_path = enriched_csv_path(month)
+        dst_path = enriched_csv_path(month, doc_folder)
         self._append_log(f"[enrich] Using input ({reason}): {src_path}")
         self._append_log(f"[enrich] Output: {dst_path}")
 
@@ -294,6 +352,14 @@ class App(tk.Tk):
         self.f_start.insert(0, self.state.get("fetch_start", "2025-01-01"))
         self.f_end.insert(0, self.state.get("fetch_end", "2025-01-31"))
 
+        # Load doc-type selections
+        if hasattr(self, 'f_doc_type_var'):
+            self.f_doc_type_var.set(self.state.get("fetch_doc_type", "MORTGAGE - MOR"))
+        if hasattr(self, 'c_doc_type_var'):
+            self.c_doc_type_var.set(self.state.get("csv_doc_type", "MORTGAGE - MOR"))
+        if hasattr(self, 'e_doc_type_var'):
+            self.e_doc_type_var.set(self.state.get("enrich_doc_type", "MORTGAGE - MOR"))
+
         self.c_start.insert(0, self.state.get("csv_start", "2025-01-01"))
         self.c_end.insert(0, self.state.get("csv_end", "2025-01-31"))
 
@@ -304,18 +370,34 @@ class App(tk.Tk):
             self.month_var.set(last_month)
 
     def _refresh_months(self) -> None:
-        months = discover_available_months()
+        # Get doc-type from enrich tab (default to MOR if not available)
+        try:
+            doc_type = self.e_doc_type_var.get() if hasattr(self, 'e_doc_type_var') else "MORTGAGE - MOR"
+        except:
+            doc_type = "MORTGAGE - MOR"
+
+        from .paths import doc_folder_for
+        doc_folder = doc_folder_for(doc_type)
+        months = discover_available_months(doc_folder)
         self.month_combo["values"] = months
         if months and not self.month_var.get():
             self.month_var.set(months[-1])
-        self.state["cookies"] = self.f_cookies.get().strip()
-        self.state["fetch_start"] = self.f_start.get().strip()
-        self.state["fetch_end"] = self.f_end.get().strip()
-        self.state["csv_start"] = self.c_start.get().strip()
-        self.state["csv_end"] = self.c_end.get().strip()
-        self.state["sleep_sec"] = self.e_sleep.get().strip()
-        self.state["month"] = self.month_var.get().strip()
-        save_state(self.state)
+
+        # Save state including doc-types
+        try:
+            self.state["cookies"] = self.f_cookies.get().strip()
+            self.state["fetch_start"] = self.f_start.get().strip()
+            self.state["fetch_end"] = self.f_end.get().strip()
+            self.state["fetch_doc_type"] = self.f_doc_type_var.get() if hasattr(self, 'f_doc_type_var') else "MORTGAGE - MOR"
+            self.state["csv_start"] = self.c_start.get().strip()
+            self.state["csv_end"] = self.c_end.get().strip()
+            self.state["csv_doc_type"] = self.c_doc_type_var.get() if hasattr(self, 'c_doc_type_var') else "MORTGAGE - MOR"
+            self.state["sleep_sec"] = self.e_sleep.get().strip()
+            self.state["month"] = self.month_var.get().strip()
+            self.state["enrich_doc_type"] = self.e_doc_type_var.get() if hasattr(self, 'e_doc_type_var') else "MORTGAGE - MOR"
+            save_state(self.state)
+        except:
+            pass
 
 
 def main() -> None:

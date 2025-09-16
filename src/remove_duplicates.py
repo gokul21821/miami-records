@@ -38,7 +38,7 @@ def contains_business_terms(name):
         'CAPITAL', 'MORTGAGE', 'COMPANY', 'ASSOCIATION', 'PRODUCTS',
         'EVERGREEN', 'LP', 'REGISTRATION', 'UNION', 'NBA', 'PROPERTIES', 'LOANS','URBAN','FINANCIAL','HOME',
         'FINANCE','INVESTMENTS','DEVELOPMENT','DEBT','CAPITAL','FINANCE','INVESTMENTS','DEVELOPMENT','DEBT','CAPITAL',
-        'CORPORATION', 'MORTGAGE'
+        'CORPORATION', 'MORTGAGE', 'LTD', 'SERVICES', 'MIAMI'
     ]
     
     # Convert to uppercase for case-insensitive matching
