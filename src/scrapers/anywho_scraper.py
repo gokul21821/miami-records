@@ -27,14 +27,21 @@ def get_random_user_agent() -> str:
     """Get a random modern user agent"""
     return random.choice(MODERN_USER_AGENTS)
 
-def build_enhanced_session(ua: Optional[str] = None) -> requests.Session:
-    """Create session with realistic browser headers and anti-detection measures"""
+def build_enhanced_session(ua: Optional[str] = None, initialize_session: bool = True) -> requests.Session:
+    """Create session with realistic browser headers and Cloudflare bypass measures"""
     s = requests.Session()
 
     # Use random modern user agent if not specified
     user_agent = ua or get_random_user_agent()
 
-    # Enhanced headers that mimic real browser behavior
+    # Generate realistic Sec-Ch-Ua values based on user agent
+    chrome_version = "131"
+    if "Chrome/130" in user_agent:
+        chrome_version = "130"
+    elif "Chrome/129" in user_agent:
+        chrome_version = "129"
+
+    # Enhanced headers with Cloudflare bypass measures
     headers = {
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -46,15 +53,38 @@ def build_enhanced_session(ua: Optional[str] = None) -> requests.Session:
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
-        "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        f'Sec-Ch-Ua': f'"Google Chrome";v="{chrome_version}", "Chromium";v="{chrome_version}", "Not_A Brand";v="24"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
         "Cache-Control": "max-age=0",
         "DNT": "1",
+
+        # Cloudflare bypass headers
+        "CF-IPCountry": "US",
+        "CF-Visitor": '{"scheme":"https"}',
+
+        # Start with Google referer (will be updated)
         "Referer": "https://www.google.com/",
     }
 
     s.headers.update(headers)
+
+    # Initialize session by visiting homepage first (like real browsers)
+    if initialize_session:
+        try:
+            print("  Initializing session by visiting AnyWho homepage...")
+            # Visit homepage with search engine referer
+            s.headers.update({"Referer": "https://www.google.com/search?q=phone+lookup"})
+            home_response = s.get("https://www.anywho.com/", timeout=DEFAULT_REQUEST_TIMEOUT)
+            home_response.raise_for_status()
+
+            # Small delay to look more human
+            time.sleep(random.uniform(1.0, 2.0))
+
+            print("  Session initialized successfully")
+        except Exception as e:
+            print(f"  Warning: Session initialization failed: {e}")
+
     return s
 
 def build_session(ua: Optional[str] = None) -> requests.Session:
@@ -117,8 +147,14 @@ def enrich_name(session: requests.Session, name: str, addr: str, sleep_sec: floa
                 # Add random delay before request
                 actual_delay = add_random_delay(sleep_sec)
 
-                # Update referer to make request look more natural
+                # Update referer to the AnyWho homepage (now that we've visited it)
                 session.headers.update({"Referer": "https://www.anywho.com/"})
+
+                # Add some randomization to headers for each request
+                session.headers.update({
+                    "Sec-Fetch-Site": random.choice(["same-origin", "same-site"]),
+                    "Cache-Control": random.choice(["max-age=0", "no-cache"]),
+                })
 
                 response = session.get(url_info['url'], timeout=DEFAULT_REQUEST_TIMEOUT)
                 response.raise_for_status()
@@ -141,13 +177,21 @@ def enrich_name(session: requests.Session, name: str, addr: str, sleep_sec: floa
 
             except Exception as e:
                 print(f"  Error with {url_info['variant_type']}: {e}")
-                # If we get a 403, try with a fresh session and different user agent
+
+                # Enhanced 403 error handling with exponential backoff
                 if "403" in str(e):
-                    print(f"  Got 403 error, trying with fresh session...")
-                    session = build_enhanced_session()
+                    print(f"  Got 403 error, trying with fresh session and longer delay...")
+
+                    # Exponential backoff: wait longer before retry
+                    backoff_delay = sleep_sec * 3 + random.uniform(2.0, 5.0)
+                    print(f"  Backing off for {backoff_delay:.1f} seconds...")
+                    time.sleep(backoff_delay)
+
+                    # Try with completely fresh session
+                    fresh_session = build_enhanced_session()
                     try:
-                        session.headers.update({"Referer": "https://www.anywho.com/"})
-                        response = session.get(url_info['url'], timeout=DEFAULT_REQUEST_TIMEOUT)
+                        fresh_session.headers.update({"Referer": "https://www.anywho.com/"})
+                        response = fresh_session.get(url_info['url'], timeout=DEFAULT_REQUEST_TIMEOUT)
                         response.raise_for_status()
 
                         candidates = parse_profile_cards(response.text, variant)
@@ -157,6 +201,24 @@ def enrich_name(session: requests.Session, name: str, addr: str, sleep_sec: floa
                             print(f"    Found {len(candidates)} candidates with fresh session")
                     except Exception as e2:
                         print(f"  Fresh session also failed: {e2}")
+
+                        # If still failing, try one more time with different approach
+                        if "403" in str(e2):
+                            print("  Attempting final retry with different user agent and longer delay...")
+                            time.sleep(sleep_sec * 5)  # Even longer delay
+                            final_session = build_enhanced_session()
+                            try:
+                                final_session.headers.update({"Referer": "https://www.google.com/search?q=anywho+phone+lookup"})
+                                response = final_session.get(url_info['url'], timeout=DEFAULT_REQUEST_TIMEOUT)
+                                response.raise_for_status()
+
+                                candidates = parse_profile_cards(response.text, variant)
+                                if candidates:
+                                    all_candidates.extend(candidates)
+                                    successful_variant = url_info['variant_type']
+                                    print(f"    Found {len(candidates)} candidates with final retry")
+                            except Exception as e3:
+                                print(f"  Final retry also failed: {e3}")
                 continue
 
     if not all_candidates:
