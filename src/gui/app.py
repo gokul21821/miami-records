@@ -10,9 +10,9 @@ from pathlib import Path
 from .runner import ProcessRunner
 from .paths import (
     ROOT_DIR,
-    months_in_range, discover_available_months,
+    months_in_range, discover_available_months, discover_enriched_months,
     normalized_csv_path, normalized_clean_csv_path, enriched_csv_path,
-    pick_enrichment_input,
+    cleaned_phones_csv_path, pick_enrichment_input,
 )
 from .state import load_state, save_state
 
@@ -36,6 +36,7 @@ class App(tk.Tk):
         self._build_ui()
         self._load_state_defaults()
         self._refresh_months()
+        self._refresh_clean_months()
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -47,14 +48,17 @@ class App(tk.Tk):
         self.fetch_tab = ttk.Frame(nb)
         self.csv_tab = ttk.Frame(nb)
         self.enrich_tab = ttk.Frame(nb)
+        self.clean_tab = ttk.Frame(nb)
 
         nb.add(self.fetch_tab, text="Fetch Records")
         nb.add(self.csv_tab, text="Create CSV")
         nb.add(self.enrich_tab, text="Enrich Phones")
+        nb.add(self.clean_tab, text="Clean Phones")
 
         self._build_fetch_tab()
         self._build_csv_tab()
         self._build_enrich_tab()
+        self._build_clean_tab()
 
         bottom = ttk.Frame(self)
         bottom.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
@@ -194,6 +198,35 @@ class App(tk.Tk):
         self.enrich_btn = ttk.Button(f, text="Enrich Phones", command=self._on_enrich)
         self.enrich_btn.grid(row=2, column=5, sticky="e", pady=(8, 0))
 
+    def _build_clean_tab(self) -> None:
+        f = self.clean_tab
+        for i in range(4):
+            f.columnconfigure(i, weight=1)
+
+        ttk.Label(f, text="Month").grid(row=0, column=0, sticky="w")
+        self.clean_month_var = tk.StringVar(value="")
+        self.clean_month_combo = ttk.Combobox(f, textvariable=self.clean_month_var, values=[], state="readonly")
+        self.clean_month_combo.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+
+        self.clean_refresh_months_btn = ttk.Button(f, text="Refresh Months", command=self._refresh_clean_months)
+        self.clean_refresh_months_btn.grid(row=1, column=1, sticky="w")
+
+        # Document type selector
+        ttk.Label(f, text="Document Type").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.clean_doc_type_var = tk.StringVar(value="MORTGAGE - MOR")
+        from src.config.doc_types import GUI_DOC_TYPE_OPTIONS
+        self.clean_doc_type_combo = ttk.Combobox(
+            f,
+            textvariable=self.clean_doc_type_var,
+            values=GUI_DOC_TYPE_OPTIONS,
+            state="readonly",
+        )
+        self.clean_doc_type_combo.grid(row=3, column=0, sticky="ew")
+        self.clean_doc_type_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_clean_months())
+
+        self.clean_btn = ttk.Button(f, text="Clean Phones", command=self._on_clean_phones)
+        self.clean_btn.grid(row=3, column=3, sticky="e", pady=(8, 0))
+
     def _on_fetch(self) -> None:
         if self._busy:
             return
@@ -309,6 +342,50 @@ class App(tk.Tk):
 
         self._run(args, label=f"Enrich {month}")
 
+    def _on_clean_phones(self) -> None:
+        if self._busy:
+            return
+        month = self.clean_month_var.get().strip()
+        if not month:
+            messagebox.showerror("Validation", "Please select a month.")
+            return
+
+        # Get doc-type specific paths
+        doc_type = self.clean_doc_type_var.get()
+        from .paths import doc_folder_for
+        doc_folder = doc_folder_for(doc_type)
+        src_path = enriched_csv_path(month, doc_folder)
+        dst_path = cleaned_phones_csv_path(month, doc_folder)
+
+        if not src_path.exists():
+            messagebox.showerror("Input missing", f"No enriched CSV found for {month}.\nExpected: {src_path}")
+            return
+
+        self._append_log(f"[clean] Input: {src_path}")
+        self._append_log(f"[clean] Output: {dst_path}")
+
+        args = [
+            sys.executable, "-u", str(ROOT_DIR / "src" / "processors" / "phone_cleaner.py"),
+            "--input", str(src_path),
+            "--output", str(dst_path)
+        ]
+
+        self._run(args, label=f"Clean Phones {month}")
+
+    def _refresh_clean_months(self) -> None:
+        # Get doc-type from clean tab
+        try:
+            doc_type = self.clean_doc_type_var.get() if hasattr(self, 'clean_doc_type_var') else "MORTGAGE - MOR"
+        except:
+            doc_type = "MORTGAGE - MOR"
+
+        from .paths import doc_folder_for
+        doc_folder = doc_folder_for(doc_type)
+        months = discover_enriched_months(doc_folder)
+        self.clean_month_combo["values"] = months
+        if months and not self.clean_month_var.get():
+            self.clean_month_var.set(months[-1])
+
     def _run(self, args, label: str, after=None) -> None:
         if self._busy:
             return
@@ -336,11 +413,12 @@ class App(tk.Tk):
     def _set_controls_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
         for w in [
-            self.fetch_btn, self.csv_btn, self.enrich_btn,
-            self.stop_btn, self.clear_btn, self.refresh_months_btn,
+            self.fetch_btn, self.csv_btn, self.enrich_btn, self.clean_btn,
+            self.stop_btn, self.clear_btn, self.refresh_months_btn, self.clean_refresh_months_btn,
             self.f_start, self.f_end, self.f_cookies,
             self.c_start, self.c_end,
-            self.month_combo, self.e_from, self.e_to, self.e_sleep
+            self.month_combo, self.e_from, self.e_to, self.e_sleep,
+            self.clean_month_combo
         ]:
             try:
                 w.configure(state=state)
@@ -359,6 +437,8 @@ class App(tk.Tk):
             self.c_doc_type_var.set(self.state.get("csv_doc_type", "MORTGAGE - MOR"))
         if hasattr(self, 'e_doc_type_var'):
             self.e_doc_type_var.set(self.state.get("enrich_doc_type", "MORTGAGE - MOR"))
+        if hasattr(self, 'clean_doc_type_var'):
+            self.clean_doc_type_var.set(self.state.get("clean_doc_type", "MORTGAGE - MOR"))
 
         self.c_start.insert(0, self.state.get("csv_start", "2025-01-01"))
         self.c_end.insert(0, self.state.get("csv_end", "2025-01-31"))
@@ -368,6 +448,9 @@ class App(tk.Tk):
         last_month = self.state.get("month", "")
         if last_month:
             self.month_var.set(last_month)
+        last_clean_month = self.state.get("clean_month", "")
+        if last_clean_month:
+            self.clean_month_var.set(last_clean_month)
 
     def _refresh_months(self) -> None:
         # Get doc-type from enrich tab (default to MOR if not available)
@@ -395,6 +478,8 @@ class App(tk.Tk):
             self.state["sleep_sec"] = self.e_sleep.get().strip()
             self.state["month"] = self.month_var.get().strip()
             self.state["enrich_doc_type"] = self.e_doc_type_var.get() if hasattr(self, 'e_doc_type_var') else "MORTGAGE - MOR"
+            self.state["clean_doc_type"] = self.clean_doc_type_var.get() if hasattr(self, 'clean_doc_type_var') else "MORTGAGE - MOR"
+            self.state["clean_month"] = self.clean_month_var.get().strip()
             save_state(self.state)
         except:
             pass

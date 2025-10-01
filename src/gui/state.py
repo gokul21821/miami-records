@@ -32,6 +32,7 @@ def get_default_state() -> Dict[str, Any]:
         'fetch_doc_type': default_label,
         'csv_doc_type': default_label,
         'enrich_doc_type': default_label,
+        'clean_doc_type': default_label,
 
         # Existing fields
         'cookies': '',
@@ -41,6 +42,7 @@ def get_default_state() -> Dict[str, Any]:
         'csv_end': '2025-01-31',
         'sleep_sec': '1.0',
         'month': '',
+        'clean_month': '',
     }
 
 

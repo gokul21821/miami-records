@@ -71,6 +71,11 @@ def enriched_csv_path(month: str, doc_folder: str = DOC_FOLDER) -> Path:
     return gold_dir / f"{month}_enriched.csv"
 
 
+def cleaned_phones_csv_path(month: str, doc_folder: str = DOC_FOLDER) -> Path:
+    gold_dir = gold_dir_for(doc_folder)
+    return gold_dir / f"{month}_phones_cleaned.csv"
+
+
 def discover_available_months(doc_folder: str = DOC_FOLDER) -> List[str]:
     silver_dir = silver_dir_for(doc_folder)
     months = set()
@@ -79,6 +84,19 @@ def discover_available_months(doc_folder: str = DOC_FOLDER) -> List[str]:
             name = p.name
             if "_normalized" in name:
                 month = name.split("_normalized")[0]
+                months.add(month)
+    return sorted(months)
+
+
+def discover_enriched_months(doc_folder: str = DOC_FOLDER) -> List[str]:
+    """Discover months with enriched CSV files in gold folder."""
+    gold_dir = gold_dir_for(doc_folder)
+    months = set()
+    if gold_dir.exists():
+        for p in gold_dir.glob("*_enriched.csv"):
+            name = p.name
+            if "_enriched" in name:
+                month = name.split("_enriched")[0]
                 months.add(month)
     return sorted(months)
 

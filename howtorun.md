@@ -187,3 +187,4 @@ python -m src.gui.app
 export COOKIES=your_cookie_here
 python3 -m src.gui.app
 ```
+venv/Scripts/python.exe src/processors/phone_cleaner.py --input "data/gold/monthly/LIEN_LIE/2024-11_enriched.csv" --output "data/gold/monthly/LIEN_LIE/2024-11_enriched_phones_cleaned.csv"

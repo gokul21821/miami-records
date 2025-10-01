@@ -148,6 +148,9 @@ def clean_phone_columns(input_csv: Path, output_csv: Path, columns: Iterable[str
         long_df["Phone"] = long_df["Phone"].fillna("").astype(str)
         long_df = long_df[long_df["Phone"] != ""]
 
+        # Remove duplicate phone numbers globally
+        long_df.drop_duplicates(subset="Phone", inplace=True)
+
         # Sort to keep per-person phone entries adjacent in original input order
         long_df.sort_values(by=["_row_order", "_phone_source"], inplace=True, kind="stable")
 
